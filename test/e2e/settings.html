@@ -1,0 +1,146 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>管理画面</title>
+</head>
+<body>
+<pre id="result"></pre>
+<script>
+  // Tampermonkey の API をメモリ上の簡易版に置き換える。
+  // 保存すると location.reload() でページが読み直されるので、結果は sessionStorage に退避する
+  const done = sessionStorage.getItem('e2e-result');
+  window.__E2E_SKIP__ = Boolean(done);
+  if (done) {
+    sessionStorage.removeItem('e2e-result');
+    document.getElementById('result').textContent = done;
+  }
+
+  const store = {
+    config: {
+      defaults: { position: 'top-right', size: 'medium', prefixTabTitle: false },
+      rules: [
+        { match: '*://stg.example.com/*', label: 'STG' },
+        { match: 'file://*', label: '本番', prefixTabTitle: true },
+      ],
+    },
+  };
+  const menus = {};
+  window.GM_getValue = (k, d) => (k in store ? structuredClone(store[k]) : d);
+  window.GM_setValue = (k, v) => { store[k] = structuredClone(v); };
+  window.GM_registerMenuCommand = (name, fn) => { menus[name] = fn; };
+
+  // closed の Shadow DOM の中をテストから見られるようにする
+  const attachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function (init) {
+    return attachShadow.call(this, { ...init, mode: 'open' });
+  };
+</script>
+<script src="../../environment-ribbon.user.js"></script>
+<script>
+  (function () {
+    if (window.__E2E_SKIP__) return;
+    const results = [];
+    const check = (name, actual, expected) => {
+      const ok = JSON.stringify(actual) === JSON.stringify(expected);
+      results.push({ name, ok, actual, expected });
+    };
+    const fire = (el, value) => {
+      el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const finish = () => {
+      const text = JSON.stringify(results);
+      sessionStorage.setItem('e2e-result', text);
+      document.getElementById('result').textContent = text;
+    };
+
+    try {
+      // リボンとタブ名
+      const ribbonRoot = document.getElementById('tm-environment-ribbon').shadowRoot;
+      const ribbon = ribbonRoot.querySelector('.ribbon');
+      check('マッチしたルールの表示名がリボンに出る', ribbon.textContent, '本番');
+      // 保存済みの設定は theme を持たないので、読み込み時にパレット順で STG に赤、本番にオレンジが付く
+      check('色が決まっていない行には読み込み時にパレット順で色が付く', getComputedStyle(ribbon).backgroundColor, 'rgb(217, 119, 6)');
+      check('タブ名の先頭に [表示名] が付く', document.title, '[本番] 管理画面');
+      const wrap = getComputedStyle(ribbonRoot.querySelector('.wrap'));
+      check('全体設定どおり右上・中サイズで表示される', [wrap.top, wrap.right, wrap.width], ['0px', '0px', '150px']);
+
+      // 設定画面
+      menus['⚙ リボン設定を開く']();
+      const sr = document.getElementById('tm-environment-ribbon-settings').shadowRoot;
+      const row = (i) => sr.querySelector(`tbody[data-i="${i}"]`);
+      const summary = (i) => row(i).querySelector('.summary').textContent;
+
+      check('上書きの要約が出る', [summary(0), summary(1)], ['なし', 'タブ名: 付ける']);
+
+      row(1).querySelector('[data-act=toggle-override]').click();
+      fire(row(1).querySelector('select[data-k=position]'), 'bottom-left');
+      check('上書きを変えると要約が変わる', summary(1), '左下・タブ名: 付ける');
+
+      fire(row(1).querySelector('select[data-k=position]'), '');
+      check('「全体設定に従う」に戻すと上書きが消える', summary(1), 'タブ名: 付ける');
+
+      fire(sr.querySelector('[data-d=size]'), 'large');
+      check('全体設定を変えると「全体設定に従う（…）」の表示も変わる',
+        row(1).querySelector('select[data-k=size] option').textContent, '全体設定に従う（大）');
+
+      fire(row(0).querySelector('[data-k=label]'), 'DEV');
+      check('表示名を変えると見本が変わる', row(0).querySelector('.preview').textContent, 'DEV');
+
+      row(0).querySelector('.chip[data-theme=green]').click();
+      check('テーマを選ぶと選択状態になる', row(0).querySelector('.chip.selected').dataset.theme, 'green');
+
+      row(0).querySelector('.chip[data-theme=custom]').click();
+      check('カスタムを選ぶと今の色から色選択欄が出る',
+        [...row(0).querySelectorAll('input[type=color]')].map((el) => el.value), ['#16a34a', '#ffffff']);
+
+      fire(sr.querySelector('[data-d=prefixTabTitle]'), 'true');
+      sr.querySelector('[data-act=toggle-json]').click();
+      check('全体設定の「タブ名」は真偽値で持つ', JSON.parse(sr.querySelector('textarea').value).defaults.prefixTabTitle, true);
+      sr.querySelector('[data-act=toggle-json]').click();
+
+      const bg = sr.querySelector('.bg');
+      row(0).querySelector('[data-k=match]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }));
+      bg.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      check('入力欄から背景までドラッグしても閉じない', Boolean(document.getElementById('tm-environment-ribbon-settings')), true);
+
+      sr.querySelector('[data-act=add-here]').click();
+      check('「このサイトを追加」で表示名の欄にフォーカスが移る',
+        sr.activeElement === row(0).querySelector('[data-k=label]'), true);
+      // この時点で 1 行目はカスタム、2 行目はオレンジなので、パレット順で最初の未使用は赤
+      check('追加した行にはパレット順で未使用の色が入る', row(0).querySelector('.chip.selected').dataset.theme, 'red');
+      sr.querySelector('[data-act=add]').click();
+      check('続けて追加すると次の未使用の色が入る', row(3).querySelector('.chip.selected').dataset.theme, 'yellow');
+      row(3).querySelector('[data-act=del]').click();
+      row(0).querySelector('[data-act=del]').click();
+
+      sr.querySelector('[data-act=add]').click();
+      sr.querySelector('[data-act=save]').click();
+      check('空欄の行があると保存せずにエラーを出す', sr.querySelector('.err').textContent, '3 行目: URL パターンが空です');
+      row(2).querySelector('[data-act=del]').click();
+
+      sr.querySelector('[data-act=toggle-json]').click();
+      const json = JSON.parse(sr.querySelector('textarea').value);
+      check('JSON に編集内容が反映される', [json.defaults.size, json.rules[0].theme, json.rules[0].color], ['large', 'custom', '#16a34a']);
+      sr.querySelector('textarea').value = '{ "rules": [ { "match": "/(/", "label": "X" } ] }';
+      sr.querySelector('[data-act=toggle-json]').click();
+      check('不正な JSON の内容はフォームに戻さずエラーを出す', sr.querySelector('.err').textContent.startsWith('1 行目: 正規表現が不正'), true);
+
+      sr.querySelector('textarea').value = JSON.stringify(json);
+      sr.querySelector('[data-act=toggle-json]').click();
+      check('JSON からフォームに戻せる', row(0).querySelector('[data-k=label]').value, 'DEV');
+
+      // 保存すると location.reload() が呼ばれるが、ページが読み直されるのはこのスクリプトが終わった後
+      check('保存前は設定が変わっていない', store.config.defaults.size, 'medium');
+      sr.querySelector('[data-act=save]').click();
+      check('保存すると設定が書き込まれる', [store.config.defaults.size, store.config.rules[0].label], ['large', 'DEV']);
+      finish();
+    } catch (e) {
+      results.push({ name: '例外が起きずに最後まで動く', ok: false, actual: String(e && e.stack || e), expected: null });
+      finish();
+    }
+  })();
+</script>
+</body>
+</html>

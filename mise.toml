@@ -1,0 +1,22 @@
+[tools]
+node = "26"
+
+[tasks.check]
+description = "ユーザースクリプトの構文をチェックする"
+run = "node --check environment-ribbon.user.js"
+
+[tasks.test]
+description = "URL 判定や色の決定などの単体テストを実行する"
+run = "node --test 'test/**/*.test.mjs'"
+
+[tasks."test:e2e"]
+description = "ヘッドレス Chrome で設定画面を操作するテストを実行する(CHROME_PATH で Chrome の場所を変更可)"
+run = "node test/e2e/run.mjs"
+
+[tasks.ci]
+description = "構文チェック、単体テスト、E2E テストをまとめて実行する"
+depends = ["check", "test", "test:e2e"]
+
+[tasks.preview]
+description = "Tampermonkey なしでスクリプトを試すプレビューページをブラウザで開く"
+run = "open dev/preview.html"
